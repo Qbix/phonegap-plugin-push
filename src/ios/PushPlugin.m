@@ -333,49 +333,51 @@
         NSLog(@"PushPlugin.register: action buttons only supported on iOS8 and above");
 #endif
 
+        dispatch_async(dispatch_get_main_queue(), ^{
+        #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 80000
+                if ([[UIApplication sharedApplication]respondsToSelector:@selector(registerUserNotificationSettings:)]) {
+                    UIUserNotificationSettings *settings = [UIUserNotificationSettings settingsForTypes:UserNotificationTypes categories:categories];
+                    [[UIApplication sharedApplication] registerUserNotificationSettings:settings];
+                    [[UIApplication sharedApplication] registerForRemoteNotifications];
+                } else {
+                    [[UIApplication sharedApplication] registerForRemoteNotificationTypes:
+                     (UIRemoteNotificationTypeBadge | UIRemoteNotificationTypeSound | UIRemoteNotificationTypeAlert)];
+                }
+        #else
+                [[UIApplication sharedApplication] registerForRemoteNotificationTypes:
+                 (UIRemoteNotificationTypeBadge | UIRemoteNotificationTypeSound | UIRemoteNotificationTypeAlert)];
+        #endif
 
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 80000
-        if ([[UIApplication sharedApplication]respondsToSelector:@selector(registerUserNotificationSettings:)]) {
-            UIUserNotificationSettings *settings = [UIUserNotificationSettings settingsForTypes:UserNotificationTypes categories:categories];
-            [[UIApplication sharedApplication] registerUserNotificationSettings:settings];
-            [[UIApplication sharedApplication] registerForRemoteNotifications];
-        } else {
-            [[UIApplication sharedApplication] registerForRemoteNotificationTypes:
-             (UIRemoteNotificationTypeBadge | UIRemoteNotificationTypeSound | UIRemoteNotificationTypeAlert)];
-        }
-#else
-        [[UIApplication sharedApplication] registerForRemoteNotificationTypes:
-         (UIRemoteNotificationTypeBadge | UIRemoteNotificationTypeSound | UIRemoteNotificationTypeAlert)];
-#endif
+                //  GCM options
+                [self setGcmSenderId: [iosOptions objectForKey:@"senderID"]];
+                NSLog(@"GCM Sender ID %@", gcmSenderId);
+                if([[self gcmSenderId] length] > 0) {
+                    NSLog(@"Using GCM Notification");
+                    [self setUsesGCM: YES];
+                    [self initGCMRegistrationHandler];
+                } else {
+                    NSLog(@"Using APNS Notification");
+                    [self setUsesGCM:NO];
+                }
+                id gcmSandBoxArg = [iosOptions objectForKey:@"gcmSandbox"];
 
-        //  GCM options
-        [self setGcmSenderId: [iosOptions objectForKey:@"senderID"]];
-        NSLog(@"GCM Sender ID %@", gcmSenderId);
-        if([[self gcmSenderId] length] > 0) {
-            NSLog(@"Using GCM Notification");
-            [self setUsesGCM: YES];
-            [self initGCMRegistrationHandler];
-        } else {
-            NSLog(@"Using APNS Notification");
-            [self setUsesGCM:NO];
-        }
-        id gcmSandBoxArg = [iosOptions objectForKey:@"gcmSandbox"];
+                [self setGcmSandbox:@NO];
+                if ([self usesGCM] &&
+                    (([gcmSandBoxArg isKindOfClass:[NSString class]] && [gcmSandBoxArg isEqualToString:@"true"]) ||
+                     [gcmSandBoxArg boolValue]))
+                {
+                    NSLog(@"Using GCM Sandbox");
+                    [self setGcmSandbox:@YES];
+                }
 
-        [self setGcmSandbox:@NO];
-        if ([self usesGCM] &&
-            (([gcmSandBoxArg isKindOfClass:[NSString class]] && [gcmSandBoxArg isEqualToString:@"true"]) ||
-             [gcmSandBoxArg boolValue]))
-        {
-            NSLog(@"Using GCM Sandbox");
-            [self setGcmSandbox:@YES];
-        }
+                if (notificationMessage) {            // if there is a pending startup notification
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        // delay to allow JS event handlers to be setup
+                        [self performSelector:@selector(notificationReceived) withObject:nil afterDelay: 0.5];
+                    });
+                }
+        });
 
-        if (notificationMessage) {			// if there is a pending startup notification
-            dispatch_async(dispatch_get_main_queue(), ^{
-                // delay to allow JS event handlers to be setup
-                [self performSelector:@selector(notificationReceived) withObject:nil afterDelay: 0.5];
-            });
-        }
     }];
 }
 
@@ -403,15 +405,28 @@
     return myAction;
 }
 
+- (NSString *)stringWithDeviceToken:(NSData *)deviceToken {
+    const char *data = [deviceToken bytes];
+    NSMutableString *token = [NSMutableString string];
+
+    for (NSUInteger i = 0; i < [deviceToken length]; i++) {
+        [token appendFormat:@"%02.2hhX", data[i]];
+    }
+
+    return [token copy];
+}
+
 - (void)didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken {
     if (self.callbackId == nil) {
         NSLog(@"Unexpected call to didRegisterForRemoteNotificationsWithDeviceToken, ignoring: %@", deviceToken);
         return;
     }
-    NSLog(@"Push Plugin register success: %@", deviceToken);
+    
+    NSString *deviceTokenStrValue = [self stringWithDeviceToken:deviceToken];
+    NSLog(@"Push Plugin register success: %@", deviceTokenStrValue);
 
     NSMutableDictionary *results = [NSMutableDictionary dictionary];
-    NSString *token = [[[[deviceToken description] stringByReplacingOccurrencesOfString:@"<"withString:@""]
+    NSString *token = [[[deviceTokenStrValue stringByReplacingOccurrencesOfString:@"<"withString:@""]
                         stringByReplacingOccurrencesOfString:@">" withString:@""]
                        stringByReplacingOccurrencesOfString: @" " withString: @""];
     [results setValue:token forKey:@"deviceToken"];
